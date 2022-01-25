@@ -1,0 +1,5 @@
+{
+  "name": "Mi Smart Band Activity",
+  "render_readme": true,
+  "domains": ["sensor"]
+}
