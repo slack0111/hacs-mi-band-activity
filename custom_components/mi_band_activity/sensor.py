@@ -163,6 +163,7 @@ class MiBabdSensor(entity.Entity):
         self._name_suffix = "Mi Smart Band"
         self._state = const.STATE_UNKNOWN
         self._last_updated = const.STATE_UNKNOWN
+        self._attributes = {}
 
     @property
     def name(self):
@@ -220,7 +221,6 @@ class MiBabdBatterySensor(MiBabdSensor):
         super(MiBabdBatterySensor, self).__init__(name, address)
         self._icon = "mdi:battery"
         self._name_suffix = "battery level (%)"
-        self._last_battery_level = 0
         self._attributes = {}
 
     @property
@@ -231,7 +231,7 @@ class MiBabdBatterySensor(MiBabdSensor):
     @property
     def unit_of_measurement(self):
         """Return the unit of measurement of this entity, if any."""
-        return self._last_battery_level
+        return "%"
 
     @util.Throttle(MIN_TIME_BETWEEN_SCANS, MIN_TIME_BETWEEN_UPDATES)
     def update(self):
@@ -249,8 +249,7 @@ class MiBabdBatterySensor(MiBabdSensor):
                 time.sleep(10)
                 j = j + 1
         if battery_level:
-            self._last_battery_level = battery_level
             self._state = battery_level
-            self._last_updated = datetime.now()
-            msg = "Last Battery Level {} % at {}".format(self._last_battery_level, self._last_updated)
+            self._last_updated = time.time()
+            msg = "Last Battery Level {} % at {}".format(battery_level, datetime.now())
             _LOGGER.debug(msg)
