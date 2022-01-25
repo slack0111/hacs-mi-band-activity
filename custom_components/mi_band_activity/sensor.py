@@ -2,9 +2,10 @@
 import logging
 import time
 from datetime import datetime, timedelta
-from threading import Event
+from threading import Event, Thread
 import voluptuous
-from gattlib import GATTRequester, GATTException, BTIOException
+from decorator import decorator
+from gattlib import GATTRequester
 from homeassistant import const
 from homeassistant import util
 from homeassistant.helpers import config_validation
@@ -90,26 +91,19 @@ class MiBand(object):
         self.activity_notify_handle = None
 
     def connect(self):
-        #print("Connecting...")
-        self.requester.connect(True)
-        if not self.requester.is_connected():
-            raise BTIOException("not connected")
-        #print("Succeed.")
+        if not self.is_connected():
+            self.requester.connect(True)
 
     def wait_notification(self):
         self.received.wait(3)
 
     def resolve_service(self):
-        #print("resolving services")
-        if not self.requester.is_connected():
-            raise BTIOException("not connected")
         self.primary = self.requester.discover_primary()
         self.characteristic = self.requester.discover_characteristics()
         self.descriptors = self.requester.discover_descriptors()
         #self.activity_handle = self.find_char_handle(self.ACTIVITY_UUID)
         #self.activity_value_handle = self.activity_handle + 1
         #self.activity_notify_handle = self.activity_handle + 2
-        #print("done")
 
     def find_char_handle(self, uuid):
         for char in self.characteristic:
@@ -121,37 +115,22 @@ class MiBand(object):
         return self.requester.is_connected()
 
     def disconnect(self):
-        #print("Disconnecting...")
         if self.requester.is_connected():
             self.requester.disconnect()
-        #print("Succeed.")
 
     def device_information(self):
         device_name = self.requester.read_by_uuid(self.DEVICE_NAME_UUID)[0]
-        if not self.requester.is_connected():
-            raise BTIOException("not connected")
         serial_num = self.requester.read_by_uuid(self.SERIAL_NUMBER_UUID)[0]
         hardware_rev = self.requester.read_by_uuid(self.HARDWARE_REVISION_UUID)[0]
         software_rev = self.requester.read_by_uuid(self.SOFTWARE_REVISION_UUID)[0]
-        #print('device_name: {}'.format(device_name))
-        #print('serial_num: {}'.format(serial_num))
-        #print('hardware_rev: {}'.format(hardware_rev))
-        #print('software_rev: {}'.format(software_rev))
 
     def activity_notifications(self, enabled=True):
-        #if enabled:
-        #    print('Enabling walk notifications')
-        #else:
-        #    print("Disabling walk rate notifications")
-        if not self.requester.is_connected():
-            raise BTIOException("not connected")
         self.requester.enable_notifications(self.activity_notify_handle, enabled, False)
-        #print("done")
 
     def battery_level(self):
         data = self.requester.read_by_uuid(self.BATTERY_SERVICE_UUID)[0]
-        #print("battery level: {} %".format(int.from_bytes(data, byteorder='little')))
-        return int.from_bytes(data, byteorder='little')
+        val = int.from_bytes(data, byteorder='little')
+        return val
 
 
 class MiBabdSensor(entity.Entity):
@@ -192,12 +171,7 @@ class MiBabdSensor(entity.Entity):
         }
 
     @property
-    def device_state_attributes(self):
-        """Return device specific state attributes."""
-        return self._attributes
-
-    @property
-    def _name_suffix(self):
+    def name_suffix(self):
         """Returns the name suffix of the sensor."""
         return self._name_suffix
 
@@ -220,8 +194,10 @@ class MiBabdBatterySensor(MiBabdSensor):
     def __init__(self, name, address):
         super(MiBabdBatterySensor, self).__init__(name, address)
         self._icon = "mdi:battery"
-        self._name_suffix = "battery level (%)"
+        self._name_suffix = "Battery Level (%)"
+        self._battery_level = 0
         self._attributes = {}
+        self._update_battery_level()
 
     @property
     def name(self):
@@ -233,23 +209,27 @@ class MiBabdBatterySensor(MiBabdSensor):
         """Return the unit of measurement of this entity, if any."""
         return "%"
 
-    @util.Throttle(MIN_TIME_BETWEEN_SCANS, MIN_TIME_BETWEEN_UPDATES)
-    def update(self):
+    @decorator
+    def _run_as_thread(fn, *args, **kwargs):
+        Thread(target=fn, args=args, kwargs=kwargs).start()
+
+    @_run_as_thread
+    def _update_battery_level(self):
         j = 0
-        loop = 3
-        battery_level = None
+        loop = 10
         while j < loop:
             try:
                 self._miband.connect()
-                self._miband.resolve_service()
                 battery_level = self._miband.battery_level()
+                self._miband.disconnect()
+                self._state = battery_level
+                self._last_updated = time.time()
                 break
-            except (GATTException, BTIOException) as err:
+            except Exception as err:
                 _LOGGER.error(err)
-                time.sleep(10)
+                time.sleep(6)
                 j = j + 1
-        if battery_level:
-            self._state = battery_level
-            self._last_updated = time.time()
-            msg = "Last Battery Level {} % at {}".format(battery_level, datetime.now())
-            _LOGGER.debug(msg)
+
+    @util.Throttle(MIN_TIME_BETWEEN_SCANS, MIN_TIME_BETWEEN_UPDATES)
+    def update(self):
+        self._update_battery_level()
