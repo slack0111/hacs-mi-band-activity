@@ -1,2 +1,2 @@
-# MI Smart Band Activity
-MI Smart Band Activity Sensor
+# Mi Smart Band Activity
+Mi Smart Band Activity Sensor
