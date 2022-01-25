@@ -1,0 +1,8 @@
+{
+  "domain": "mi_band_activity",
+  "name": "Mi Smart Band Activity",
+  "dependencies": [],
+  "version": "0.1.0",
+  "codeowners": ["@slack0111"],
+  "requirements": ["pybluez","gattlib"]
+}
