@@ -40,3 +40,7 @@ sensor:
     name: Mi Smart Band 6
     address: CA:1E:82:D5:59:7D
 ```
+
+## Snapshot
+
+![This is a alt text.](https://github.com/slack0111/hacs-mi-band-activity/blob/main/snapshot.png "Here is a snapshot.")
