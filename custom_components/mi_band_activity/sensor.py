@@ -45,9 +45,9 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     device = MiBand(address)
     dev = []
     dev.append(MiBabdBatterySensor(name, device))
-    #dev.append(MiBabdStepsSensor(name, device))
-    #dev.append(MiBabdDistanceSensor(name, device))
-    #dev.append(MiBabdCaloriesSensor(name, device))
+    dev.append(MiBabdStepsSensor(name, device))
+    dev.append(MiBabdDistanceSensor(name, device))
+    dev.append(MiBabdCaloriesSensor(name, device))
     add_devices(dev, True)
 
 
@@ -59,7 +59,8 @@ class Requester(GATTRequester):
         self.wakeup = wakeup
 
     def on_notification(self, handle, data):
-        if handle == self.device.activity_value_handle:
+        # self.device.activity_value_handle:
+        if handle == 71:
             last_update = time.time()
             steps = int.from_bytes(data[4:8], byteorder='little')
             distance = int.from_bytes(data[8:12], byteorder='little')
@@ -207,7 +208,8 @@ class MiBabdBatterySensor(MiBabdSensor):
         self._icon = "mdi:battery"
         self._name_suffix = "Battery Level (%)"
         self._attributes = {}
-        self.update_data()
+        # this may cause system not up....
+        #self._update_data(False)
 
     @property
     def name(self):
@@ -224,47 +226,49 @@ class MiBabdBatterySensor(MiBabdSensor):
         Thread(target=fn, args=args, kwargs=kwargs).start()
 
     @_run_as_thread
-    def _update_data(self):
-        #if self._device.fetching_data:
-        #    return
-        #self._device.fetching_data = True
+    def _update_data(self, wait_notify=True):
         j = 0
         loop = 10
         while j < loop:
             try:
                 err_occur = False
                 self._device.connect()
-                battery_level = self._device.battery_level()
-                self._state = battery_level
-                self._last_updated = time.time()
-                #self._device.update_battery_level()
+                time.sleep(1)
+                self._device.update_battery_level()
+                #time.sleep(1)
                 #self._device.resolve_service()
+                #time.sleep(1)
                 #self._device.activity_notifications()
-                #for i in range(10):
-                #    if not self._device.is_connected():
-                #        err_occur = True
-                #        break
-                #    time.sleep(3)
+                if not wait_notify:
+                    time.sleep(1)
+                    self._device.disconnect()
+                    break
+                for i in range(20):
+                    time.sleep(1)
+                    if not self._device.is_connected():
+                        err_occur = True
+                        break
                 if err_occur:
                     time.sleep(6)
                     j = j + 1
                 else:
+                    time.sleep(1)
                     self._device.disconnect()
                     break
             except Exception as err:
-                time.sleep(6)
+                time.sleep(3)
                 j = j + 1
-        #self._device.fetching_data = False
+        self._fetch_data()
 
+    def _fetch_data(self):
+        self._last_updated = self._device.state.get(
+            "battery_level", {}).get("last_update", const.STATE_UNKNOWN)
+        self._state = self._device.state.get(
+            "battery_level", {}).get("value", const.STATE_UNKNOWN)
 
     @util.Throttle(MIN_TIME_BETWEEN_SCANS, MIN_TIME_BETWEEN_UPDATES)
     def update(self):
         self._update_data()
-        #self._last_updated = self._device.state.get(
-        #    "battery_level", {}).get("last_update", const.STATE_UNKNOWN)
-        #self._state = self._device.state.get(
-        #    "battery_level", {}).get("value", const.STATE_UNKNOWN)
-
 
 class MiBabdStepsSensor(MiBabdSensor):
     def __init__(self, name, device):
@@ -272,7 +276,6 @@ class MiBabdStepsSensor(MiBabdSensor):
         self._icon = "mdi:walk"
         self._name_suffix = "Steps"
         self._attributes = {}
-        #self._device.update_data()
 
     @property
     def name(self):
@@ -286,7 +289,6 @@ class MiBabdStepsSensor(MiBabdSensor):
 
     @util.Throttle(MIN_TIME_BETWEEN_SCANS, MIN_TIME_BETWEEN_UPDATES)
     def update(self):
-        #self._device.update_data()
         self._last_updated = self._device.state.get(
             "activity", {}).get("last_update", const.STATE_UNKNOWN)
         self._state = self._device.state.get(
@@ -299,7 +301,6 @@ class MiBabdDistanceSensor(MiBabdSensor):
         self._icon = "mdi:walk"
         self._name_suffix = "Distance"
         self._attributes = {}
-        #self._device.update_data()
 
     @property
     def name(self):
@@ -313,7 +314,6 @@ class MiBabdDistanceSensor(MiBabdSensor):
 
     @util.Throttle(MIN_TIME_BETWEEN_SCANS, MIN_TIME_BETWEEN_UPDATES)
     def update(self):
-        #self._device.update_data()
         self._last_updated = self._device.state.get(
             "activity", {}).get("last_update", const.STATE_UNKNOWN)
         self._state = self._device.state.get(
@@ -326,7 +326,6 @@ class MiBabdCaloriesSensor(MiBabdSensor):
         self._icon = "mdi:food"
         self._name_suffix = "Calories"
         self._attributes = {}
-        #self._device.update_data()
 
     @property
     def name(self):
@@ -340,7 +339,6 @@ class MiBabdCaloriesSensor(MiBabdSensor):
 
     @util.Throttle(MIN_TIME_BETWEEN_SCANS, MIN_TIME_BETWEEN_UPDATES)
     def update(self):
-        #self._device.update_data()
         self._last_updated = self._device.state.get(
             "activity", {}).get("last_update", const.STATE_UNKNOWN)
         self._state = self._device.state.get(
