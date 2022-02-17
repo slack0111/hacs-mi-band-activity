@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
+import asyncio
 import logging
 import time
 from datetime import datetime, timedelta
 from threading import Event, Thread
 from decorator import decorator
 import voluptuous
-from gattlib import GATTRequester
+from gattlib import GATTRequester, GATTResponse
 from homeassistant import const
 from homeassistant import util
 from homeassistant.helpers import config_validation
@@ -60,7 +61,7 @@ class Requester(GATTRequester):
 
     def on_notification(self, handle, data):
         # self.device.activity_value_handle:
-        if handle == 71:
+        if handle == 71 and not self.device.fetching_data:
             last_update = time.time()
             steps = int.from_bytes(data[4:8], byteorder='little')
             distance = int.from_bytes(data[8:12], byteorder='little')
@@ -70,74 +71,84 @@ class Requester(GATTRequester):
 
 
 class MiBand(object):
-    DEVICE_NAME_UUID = '00002a00-0000-1000-8000-00805f9b34fb'
-    SERIAL_NUMBER_UUID = '00002a25-0000-1000-8000-00805f9b34fb'
-    HARDWARE_REVISION_UUID = '00002a27-0000-1000-8000-00805f9b34fb'
-    SOFTWARE_REVISION_UUID = '00002a28-0000-1000-8000-00805f9b34fb'
-    ACTIVITY_UUID = '00000007-0000-3512-2118-0009af100700'
     BATTERY_SERVICE_UUID = '00002a19-0000-1000-8000-00805f9b34fb'
 
     def __init__(self, address):
-        self.received = Event()
-        self.requester = Requester(self.received, address, False, self)
-        self.address = address
-        self.primary = None
-        self.characteristic = None
-        self.descriptors = None
-        self.activity_handle = None
-        self.activity_value_handle = None
-        self.activity_notify_handle = None
-        self.state = {}
-        self.fetching_data = False
+        self._received = Event()
+        self._requester = Requester(self._received, address, False, self)
+        self._response = GATTResponse()
+        self._address = address
+        self._battery_level = 0
+        self._fetching_data = False
+        self._state = {}
+
+    @property
+    def battery_level(self):
+        return self._battery_level
 
     def connect(self):
         if not self.is_connected():
-            self.requester.connect(True)
+            try:
+                self._requester.connect(True)
+            except RuntimeError as err:
+                print("[RuntimeError]: {}".format(err))
 
-    def wait_notification(self):
-        self.received.wait(3)
-
-    def resolve_service(self):
-        self.primary = self.requester.discover_primary()
-        self.characteristic = self.requester.discover_characteristics()
-        self.descriptors = self.requester.discover_descriptors()
-        self.activity_handle = self.find_char_handle(self.ACTIVITY_UUID)
-        self.activity_value_handle = self.activity_handle + 1
-        self.activity_notify_handle = self.activity_handle + 2
-
-    def find_char_handle(self, uuid):
-        for char in self.characteristic:
-            if uuid == char['uuid']:
-                return char['handle']
-        return None
+    async def connect_async(self):
+        print(self.connect_async.__name__)
+        if not self.is_connected():
+            try:
+                self._requester.connect(False)
+            except RuntimeError as err:
+                print("[RuntimeError]: {}".format(err))
+        for i in range(90):
+            if self.is_connected():
+                break
+            await asyncio.sleep(0.1)
 
     def is_connected(self):
-        return self.requester.is_connected()
+        return self._requester.is_connected()
 
     def disconnect(self):
-        if self.requester.is_connected():
-            self.requester.disconnect()
+        if self._requester.is_connected():
+            self._requester.disconnect()
 
-    def device_information(self):
-        device_name = self.requester.read_by_uuid(self.DEVICE_NAME_UUID)[0]
-        serial_num = self.requester.read_by_uuid(self.SERIAL_NUMBER_UUID)[0]
-        hardware_rev = self.requester.read_by_uuid(self.HARDWARE_REVISION_UUID)[0]
-        software_rev = self.requester.read_by_uuid(self.SOFTWARE_REVISION_UUID)[0]
+    @property
+    def fetching_data(self):
+        return self._fetching_data
 
-    def activity_notifications(self, enabled=True):
-        self.requester.enable_notifications(self.activity_notify_handle, enabled, False)
+    async def get_battery_level_async(self):
+        print(self.get_battery_level_async.__name__)
+        for i in range(90):
+            if self.is_connected():
+                try:
+                    data = self._requester.read_by_uuid(self.BATTERY_SERVICE_UUID)[0]
+                    self._battery_level = int.from_bytes(data, byteorder='little')
+                    self.__update_battery_level()
+                    break
+                except RuntimeError as err:
+                    print("[RuntimeError]: {}".format(err))
+            await asyncio.sleep(0.1)
 
-    def battery_level(self):
-        data = self.requester.read_by_uuid(self.BATTERY_SERVICE_UUID)[0]
-        val = int.from_bytes(data, byteorder='little')
-        return val
+    async def wait_activity_notify(self):
+        print(self.wait_activity_notify.__name__)
+        for i in range(90):
+            if self._fetching_data:
+                break
+            await asyncio.sleep(0.1)
 
-    def update_battery_level(self):
-        battery_level = self.battery_level()
+    @property
+    def state(self):
+        return self._state
+
+    def __update_battery_level(self):
+        battery_level = self._battery_level
+        if battery_level == 0:
+            return
         last_updated = time.time()
         self.state["battery_level"] = {
             "last_update": last_updated,
             "value": battery_level}
+        print(self.state["battery_level"])
 
     def update_activity(self, last_update ,steps, distance, calories):
         self.state["activity"] = {
@@ -145,6 +156,12 @@ class MiBand(object):
             "steps": steps,
             "distance": distance,
             "calories": calories}
+        print(self.state["activity"])
+        self._fetching_data = True
+
+    def reset(self):
+        self._fetching_data = False
+
 
 class MiBabdSensor(entity.Entity):
     def __init__(self, name, device):
@@ -208,8 +225,6 @@ class MiBabdBatterySensor(MiBabdSensor):
         self._icon = "mdi:battery"
         self._name_suffix = "Battery Level (%)"
         self._attributes = {}
-        # this may cause system not up....
-        #self._update_data(False)
 
     @property
     def name(self):
@@ -221,44 +236,15 @@ class MiBabdBatterySensor(MiBabdSensor):
         """Return the unit of measurement of this entity, if any."""
         return "%"
 
-    @decorator
-    def _run_as_thread(fn, *args, **kwargs):
-        Thread(target=fn, args=args, kwargs=kwargs).start()
-
-    @_run_as_thread
-    def _update_data(self, wait_notify=True):
-        j = 0
-        loop = 10
-        while j < loop:
-            try:
-                err_occur = False
-                self._device.connect()
-                time.sleep(1)
-                self._device.update_battery_level()
-                #time.sleep(1)
-                #self._device.resolve_service()
-                #time.sleep(1)
-                #self._device.activity_notifications()
-                if not wait_notify:
-                    time.sleep(1)
-                    self._device.disconnect()
-                    break
-                for i in range(20):
-                    time.sleep(1)
-                    if not self._device.is_connected():
-                        err_occur = True
-                        break
-                if err_occur:
-                    time.sleep(6)
-                    j = j + 1
-                else:
-                    time.sleep(1)
-                    self._device.disconnect()
-                    break
-            except Exception as err:
-                time.sleep(3)
-                j = j + 1
-        self._fetch_data()
+    async def _update_data(self):
+        self._device.reset()
+        task1 = asyncio.create_task(self._device.connect_async()) 
+        task2 = asyncio.create_task(self._device.get_battery_level_async()) 
+        task3 = asyncio.create_task(self._device.wait_activity_notify()) 
+        await task1
+        await task2
+        await task3
+        self._device.disconnect()
 
     def _fetch_data(self):
         self._last_updated = self._device.state.get(
@@ -268,7 +254,8 @@ class MiBabdBatterySensor(MiBabdSensor):
 
     @util.Throttle(MIN_TIME_BETWEEN_SCANS, MIN_TIME_BETWEEN_UPDATES)
     def update(self):
-        self._update_data()
+        asyncio.run(self._update_data())
+        self._fetch_data()
 
 class MiBabdStepsSensor(MiBabdSensor):
     def __init__(self, name, device):
